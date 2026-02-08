@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import platform
+import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
@@ -53,14 +55,58 @@ def build_report(context: BinaryContext) -> AnalysisReport:
     return AnalysisReport(context=context_dict, findings=context_dict["findings"], hints=hints)
 
 
+REQUIRED_TOOLS = ["strings", "nm"]
+OPTIONAL_TOOLS = ["file", "checksec"]
+
+
 def preflight_tools() -> list[str]:
-    required_tools = ["strings", "nm"]
-    optional_tools = ["file", "checksec"]
+    required_tools = REQUIRED_TOOLS
+    optional_tools = OPTIONAL_TOOLS
     missing = [tool for tool in required_tools if not tool_exists(tool)]
     if missing:
         raise RuntimeError(f"Missing required tools: {', '.join(missing)}")
     optional_missing = [tool for tool in optional_tools if not tool_exists(tool)]
     return optional_missing
+
+
+def install_instructions(tools: list[str]) -> str:
+    system = platform.system().lower()
+    if system == "linux":
+        return (
+            "Linux detected. Install with your package manager, e.g.:\n"
+            "  Debian/Ubuntu: sudo apt-get update && sudo apt-get install -y "
+            + " ".join(tools)
+            + "\n"
+            "  Fedora: sudo dnf install -y "
+            + " ".join(tools)
+            + "\n"
+            "  Arch: sudo pacman -S "
+            + " ".join(tools)
+        )
+    if system == "darwin":
+        return "macOS detected. Install with Homebrew:\n  brew install " + " ".join(tools)
+    return f"Unknown OS. Please install: {', '.join(tools)}"
+
+
+def install_tools(tools: list[str]) -> None:
+    safe_tools = [tool for tool in tools if tool in REQUIRED_TOOLS + OPTIONAL_TOOLS]
+    if not safe_tools:
+        raise RuntimeError("No known tools to install.")
+    system = platform.system().lower()
+    if system != "linux":
+        raise RuntimeError(install_instructions(tools))
+    package_managers = [
+        ("apt-get", ["sudo", "apt-get", "update"], ["sudo", "apt-get", "install", "-y"]),
+        ("dnf", [], ["sudo", "dnf", "install", "-y"]),
+        ("pacman", [], ["sudo", "pacman", "-S"]),
+    ]
+    for manager, update_cmd, install_cmd in package_managers:
+        if tool_exists(manager):
+            if update_cmd:
+                subprocess.run(update_cmd, check=False)
+            subprocess.run(install_cmd + safe_tools, check=False)
+            return
+    raise RuntimeError(install_instructions(tools))
 
 
 def extract_archive(path: str) -> tuple[str, TemporaryDirectory] | None:
@@ -92,8 +138,17 @@ def sanity_check(path: str) -> None:
         raise ValueError("Selected file is not an ELF binary.")
 
 
-def analyze_path(path: str, fmt: str) -> str:
-    preflight_missing = preflight_tools()
+def analyze_path(path: str, fmt: str, install_missing: bool = False) -> str:
+    try:
+        preflight_missing = preflight_tools()
+    except RuntimeError as exc:
+        missing_tools = [tool.strip() for tool in str(exc).split(": ", 1)[-1].split(", ")]
+        missing_tools = [tool for tool in missing_tools if tool in REQUIRED_TOOLS]
+        if install_missing:
+            install_tools(missing_tools)
+            preflight_missing = preflight_tools()
+        else:
+            raise RuntimeError(f"{exc}\n\n{install_instructions(missing_tools)}") from exc
     extracted = extract_archive(path)
     temp_dir = None
     try:
@@ -121,6 +176,11 @@ def parse_args() -> argparse.Namespace:
         help="Output format",
     )
     parser.add_argument("--output", help="Write report to file instead of stdout")
+    parser.add_argument(
+        "--install-tools",
+        action="store_true",
+        help="Attempt to install missing required tools using the system package manager.",
+    )
     return parser.parse_args()
 
 
@@ -133,7 +193,7 @@ def write_output(content: str, output_path: str | None) -> None:
 
 def main() -> None:
     args = parse_args()
-    content = analyze_path(args.binary, args.format)
+    content = analyze_path(args.binary, args.format, install_missing=args.install_tools)
     write_output(content, args.output)
 
 

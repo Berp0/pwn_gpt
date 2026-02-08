@@ -131,6 +131,16 @@ GUI pozwala wrzucić plik binarki lub archiwum i od razu zobaczyć raport w okni
 - Wykonuje sanity check: czy plik istnieje, czy to regularny plik, czy nie jest pusty/za duży, i czy jest ELF-em.
 - Jeśli dostarczysz archiwum (`.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`), binarka zostanie automatycznie wyekstrahowana.
 
+### Instalacja wymaganych narzędzi
+
+Możesz spróbować automatycznej instalacji narzędzi wymaganych do analizy:
+
+```bash
+python -m pwn_hacking_tool.cli ./chall --install-tools
+```
+
+**Security:** instalator używa tylko zaufanych menedżerów pakietów (`apt-get`, `dnf`, `pacman`) i uruchamia je bez `shell=True`. Nie pobiera nic z arbitralnych URL-i ani nie wykonuje niezweryfikowanych skryptów.
+
 ## Architektura danych (BinaryContext)
 
 Minimalny schema danych generowany przez `BinaryContext`:

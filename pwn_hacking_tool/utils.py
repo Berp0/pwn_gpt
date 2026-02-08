@@ -71,7 +71,8 @@ def is_elf(path: str | Path) -> bool:
 def ensure_file(path: str | Path) -> None:
     path_obj = Path(path)
     if not path_obj.exists():
-        raise FileNotFoundError(f"File not found: {path_obj}")
+        cwd = Path.cwd()
+        raise FileNotFoundError(f"File not found: {path_obj} (cwd: {cwd})")
     if not path_obj.is_file():
         raise ValueError(f"Not a regular file: {path_obj}")
 
