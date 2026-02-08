@@ -127,7 +127,7 @@ GUI pozwala wrzucić plik binarki lub archiwum i od razu zobaczyć raport w okni
 
 ### Preflight i sanity checks
 
-- Narzędzie sprawdza dostępność kluczowych narzędzi (`file`, `strings`, `nm`) przed analizą.
+- Narzędzie sprawdza dostępność kluczowych narzędzi (`strings`, `nm`) przed analizą. `file` i `checksec` są opcjonalne.
 - Wykonuje sanity check: czy plik istnieje, czy to regularny plik, czy nie jest pusty/za duży, i czy jest ELF-em.
 - Jeśli dostarczysz archiwum (`.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`), binarka zostanie automatycznie wyekstrahowana.
 

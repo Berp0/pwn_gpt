@@ -23,7 +23,7 @@ from .report import AnalysisReport
 from .utils import check_file_size, ensure_file, is_elf, tool_exists
 
 
-def build_context(path: str) -> BinaryContext:
+def build_context(path: str, preflight_missing: list[str] | None = None) -> BinaryContext:
     output = AdapterOutput()
     binary_info = run_file(path, output)
     protections = run_checksec(path, output)
@@ -32,6 +32,8 @@ def build_context(path: str) -> BinaryContext:
     control = detect_control(symbols, protections)
     leaks = detect_leaks(strings, symbols)
     metadata = collect_adapter_metadata(output)
+    if preflight_missing:
+        metadata["preflight_missing"] = preflight_missing
     return BinaryContext(
         binary=binary_info,
         protections=protections,
@@ -51,11 +53,14 @@ def build_report(context: BinaryContext) -> AnalysisReport:
     return AnalysisReport(context=context_dict, findings=context_dict["findings"], hints=hints)
 
 
-def preflight_tools() -> None:
-    required_tools = ["file", "strings", "nm"]
+def preflight_tools() -> list[str]:
+    required_tools = ["strings", "nm"]
+    optional_tools = ["file", "checksec"]
     missing = [tool for tool in required_tools if not tool_exists(tool)]
     if missing:
         raise RuntimeError(f"Missing required tools: {', '.join(missing)}")
+    optional_missing = [tool for tool in optional_tools if not tool_exists(tool)]
+    return optional_missing
 
 
 def extract_archive(path: str) -> tuple[str, TemporaryDirectory] | None:
@@ -88,14 +93,14 @@ def sanity_check(path: str) -> None:
 
 
 def analyze_path(path: str, fmt: str) -> str:
-    preflight_tools()
+    preflight_missing = preflight_tools()
     extracted = extract_archive(path)
     temp_dir = None
     try:
         if extracted:
             path, temp_dir = extracted
         sanity_check(path)
-        report = build_report(build_context(path))
+        report = build_report(build_context(path, preflight_missing))
         if fmt == "json":
             return report.to_json()
         if fmt == "markdown":
