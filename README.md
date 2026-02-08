@@ -107,6 +107,7 @@ Koreluje podatności + zabezpieczenia + symbole i wybiera najbardziej prawdopodo
 
 ```bash
 python -m pwn_hacking_tool.cli ./chall
+python main.py ./chall
 ```
 
 ### Format wyjścia
