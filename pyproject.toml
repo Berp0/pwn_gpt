@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=67", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pwn-hacking-tool"
+version = "0.1.0"
+description = "Analytical framework for pwn/CTF ELF binaries"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["pwn", "ctf", "elf", "analysis"]
+authors = [{ name = "Codex" }]
+
+[project.scripts]
+pwn-hacking-tool = "pwn_hacking_tool.cli:main"
