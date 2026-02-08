@@ -43,6 +43,18 @@ python -m pwn_hacking_tool.cli ./chall --format json --output report.json
 python -m pwn_hacking_tool.cli ./chall --format explain --output explain.json
 ```
 
+### Wybór narzędzi
+
+```bash
+python -m pwn_hacking_tool.cli ./chall --tools strings,nm,readelf,checksec
+```
+
+### API key (opcjonalnie)
+
+```bash
+python -m pwn_hacking_tool.cli ./chall --api-key "$PWN_TOOL_API_KEY"
+```
+
 ### Walidacja narzędzi
 
 ```bash
@@ -82,6 +94,7 @@ python -m pwn_hacking_tool.gui
 ```
 
 GUI pozwala wrzucić binarkę lub archiwum i skopiować raport do schowka.
+Możesz też wybrać zestaw narzędzi i podać API key z poziomu GUI.
 
 ---
 

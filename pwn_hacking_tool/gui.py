@@ -3,7 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from .cli import analyze_path
+from .cli import OPTIONAL_TOOLS, REQUIRED_TOOLS, analyze_path
 
 
 def run_gui() -> None:
@@ -13,6 +13,7 @@ def run_gui() -> None:
 
     path_var = tk.StringVar()
     output_var = tk.StringVar(value="text")
+    api_key_var = tk.StringVar()
     status_var = tk.StringVar(value="Ready.")
 
     style = ttk.Style(root)
@@ -33,7 +34,10 @@ def run_gui() -> None:
         try:
             status_var.set("Analyzing...")
             root.update_idletasks()
-            report_text = analyze_path(path, output_var.get())
+            selected_tools = [
+                tool for tool, var in tool_vars.items() if var.get()
+            ]
+            report_text = analyze_path(path, output_var.get(), selected_tools, api_key_var.get() or None)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Analysis failed", str(exc))
             status_var.set("Error during analysis.")
@@ -69,6 +73,22 @@ def run_gui() -> None:
     )
     ttk.Button(options, text="Analyze", command=run_analysis).pack(side=tk.LEFT, padx=10)
     ttk.Button(options, text="Copy to clipboard", command=copy_output).pack(side=tk.LEFT)
+
+    tool_frame = ttk.LabelFrame(frame, text="Tools")
+    tool_frame.pack(fill=tk.X, pady=6)
+    tool_vars: dict[str, tk.BooleanVar] = {}
+    for tool in REQUIRED_TOOLS + OPTIONAL_TOOLS:
+        var = tk.BooleanVar(value=True)
+        tool_vars[tool] = var
+        checkbox = ttk.Checkbutton(tool_frame, text=tool, variable=var)
+        if tool in REQUIRED_TOOLS:
+            checkbox.state(["disabled"])
+        checkbox.pack(side=tk.LEFT, padx=4, pady=2)
+
+    api_frame = ttk.Frame(frame)
+    api_frame.pack(fill=tk.X, pady=4)
+    ttk.Label(api_frame, text="API key (optional):").pack(side=tk.LEFT)
+    ttk.Entry(api_frame, textvariable=api_key_var, width=40, show="*").pack(side=tk.LEFT, padx=5)
 
     output_frame = ttk.Frame(frame)
     output_frame.pack(fill=tk.BOTH, expand=True)

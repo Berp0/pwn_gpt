@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import subprocess
 import tarfile
@@ -28,11 +29,13 @@ REQUIRED_TOOLS = ["strings", "nm"]
 OPTIONAL_TOOLS = ["file", "checksec", "readelf", "objdump", "ldd", "ROPgadget", "r2", "gdb"]
 
 
-def preflight_tools() -> list[str]:
-    missing = [tool for tool in REQUIRED_TOOLS if not tool_exists(tool)]
+def preflight_tools(selected_tools: list[str]) -> list[str]:
+    required = [tool for tool in selected_tools if tool in REQUIRED_TOOLS]
+    optional = [tool for tool in selected_tools if tool in OPTIONAL_TOOLS]
+    missing = [tool for tool in required if not tool_exists(tool)]
     if missing:
         raise RuntimeError(f"Missing required tools: {', '.join(missing)}")
-    return [tool for tool in OPTIONAL_TOOLS if not tool_exists(tool)]
+    return [tool for tool in optional if not tool_exists(tool)]
 
 
 def install_instructions(tools: list[str]) -> str:
@@ -104,7 +107,12 @@ def sanity_check(path: str) -> None:
         raise ValueError("Selected file is not an ELF binary.")
 
 
-def build_context(path: str, validator: ToolchainValidator, preflight_missing: list[str]) -> BinaryKnowledgeContext:
+def build_context(
+    path: str,
+    validator: ToolchainValidator,
+    preflight_missing: list[str],
+    api_key_provided: bool,
+) -> BinaryKnowledgeContext:
     metadata = extract_fingerprint(path, validator)
     protections = extract_protections(path, validator)
     imports_data = extract_imports(path, validator)
@@ -128,21 +136,28 @@ def build_context(path: str, validator: ToolchainValidator, preflight_missing: l
             "capabilities": validator.capabilities(),
             "preflight_missing": preflight_missing,
             "fingerprint": toolchain,
+            "api_key_provided": api_key_provided,
         },
     )
     context.metadata["strings"] = strings_data
     return context
 
 
-def analyze_path(path: str, fmt: str, install_missing: bool = False) -> str:
+def analyze_path(
+    path: str,
+    fmt: str,
+    selected_tools: list[str],
+    api_key: str | None,
+    install_missing: bool = False,
+) -> str:
     try:
-        preflight_missing = preflight_tools()
+        preflight_missing = preflight_tools(selected_tools)
     except RuntimeError as exc:
         missing_tools = [tool.strip() for tool in str(exc).split(": ", 1)[-1].split(", ")]
         missing_tools = [tool for tool in missing_tools if tool in REQUIRED_TOOLS]
         if install_missing:
             install_tools(missing_tools)
-            preflight_missing = preflight_tools()
+            preflight_missing = preflight_tools(selected_tools)
         else:
             raise RuntimeError(f"{exc}\n\n{install_instructions(missing_tools)}") from exc
 
@@ -152,9 +167,9 @@ def analyze_path(path: str, fmt: str, install_missing: bool = False) -> str:
         if extracted:
             path, temp_dir = extracted
         sanity_check(path)
-        validator = ToolchainValidator(REQUIRED_TOOLS + OPTIONAL_TOOLS)
+        validator = ToolchainValidator(selected_tools)
         validator.validate()
-        context = build_context(path, validator, preflight_missing)
+        context = build_context(path, validator, preflight_missing, api_key_provided=bool(api_key))
         context_dict = context.to_dict()
         context_dict["heuristic_scores"] = score_paths(context_dict)
         context_dict["exploit_paths"] = synthesize_paths(context_dict)
@@ -169,8 +184,8 @@ def analyze_path(path: str, fmt: str, install_missing: bool = False) -> str:
             temp_dir.cleanup()
 
 
-def validate_tools() -> str:
-    validator = ToolchainValidator(REQUIRED_TOOLS + OPTIONAL_TOOLS)
+def validate_tools(selected_tools: list[str]) -> str:
+    validator = ToolchainValidator(selected_tools)
     status = validator.validate()
     lines = ["[TOOLCHAIN VALIDATION]"]
     for tool, state in status.items():
@@ -190,6 +205,14 @@ def parse_args() -> argparse.Namespace:
         help="Output format",
     )
     parser.add_argument("--output", help="Write report to file instead of stdout")
+    parser.add_argument(
+        "--tools",
+        help="Comma-separated list of tools to use (default: all supported tools).",
+    )
+    parser.add_argument(
+        "--api-key",
+        help="API key for optional GPT adapter (also read from PWN_TOOL_API_KEY).",
+    )
     parser.add_argument(
         "--install-tools",
         action="store_true",
@@ -217,16 +240,28 @@ def write_output(content: str, output_path: str | None) -> None:
 
 def main() -> None:
     args = parse_args()
+    selected_tools = (
+        [tool.strip() for tool in args.tools.split(",") if tool.strip()]
+        if args.tools
+        else REQUIRED_TOOLS + OPTIONAL_TOOLS
+    )
+    api_key = args.api_key or os.getenv("PWN_TOOL_API_KEY")
     if args.install_tools_only:
-        install_tools(REQUIRED_TOOLS)
+        install_tools([tool for tool in selected_tools if tool in REQUIRED_TOOLS])
         print("Tools installation attempted. Re-run with --validate-tools to verify.")
         return
     if args.validate_tools:
-        write_output(validate_tools(), args.output)
+        write_output(validate_tools(selected_tools), args.output)
         return
     if not args.binary:
         raise SystemExit("Binary path required unless using --install-tools-only or --validate-tools.")
-    content = analyze_path(args.binary, args.format, install_missing=args.install_tools)
+    content = analyze_path(
+        args.binary,
+        args.format,
+        selected_tools,
+        api_key,
+        install_missing=args.install_tools,
+    )
     write_output(content, args.output)
 
 
