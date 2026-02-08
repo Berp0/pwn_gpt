@@ -83,3 +83,6 @@ def check_file_size(path: str | Path, max_bytes: int = 200 * 1024 * 1024) -> Non
         raise ValueError("File is empty.")
     if size > max_bytes:
         raise ValueError(f"File too large ({size} bytes). Max allowed is {max_bytes} bytes.")
+        raise ValueError(\"File is empty.\")
+    if size > max_bytes:
+        raise ValueError(f\"File too large ({size} bytes). Max allowed is {max_bytes} bytes.\")
