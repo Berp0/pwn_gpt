@@ -8,65 +8,31 @@ import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from .adapters import (
-    AdapterOutput,
-    collect_adapter_metadata,
-    detect_control,
-    detect_leaks,
-    run_checksec,
-    run_file,
-    run_nm,
-    run_strings,
-)
-from .context import BinaryContext
-from .detectors import run_detectors
-from .hints import build_hints
-from .report import AnalysisReport
+from .context import BinaryKnowledgeContext
+from .extractors.callgraph import extract_callgraph
+from .extractors.fingerprint import extract_fingerprint
+from .extractors.got import extract_got
+from .extractors.imports import extract_imports
+from .extractors.input_surface import extract_input_surface
+from .extractors.stack import analyze_stack_frame
+from .extractors.strings import extract_strings
+from .extractors.toolchain import extract_toolchain_fingerprint
+from .extractors.protections import extract_protections
+from .reporting import Report
+from .scoring import score_paths
+from .synthesizer import synthesize_paths
 from .utils import check_file_size, ensure_file, is_elf, tool_exists
-
-
-def build_context(path: str, preflight_missing: list[str] | None = None) -> BinaryContext:
-    output = AdapterOutput()
-    binary_info = run_file(path, output)
-    protections = run_checksec(path, output)
-    symbols = run_nm(path, output)
-    strings = run_strings(path, output)
-    control = detect_control(symbols, protections)
-    leaks = detect_leaks(strings, symbols)
-    metadata = collect_adapter_metadata(output)
-    if preflight_missing:
-        metadata["preflight_missing"] = preflight_missing
-    return BinaryContext(
-        binary=binary_info,
-        protections=protections,
-        symbols=symbols,
-        strings=strings,
-        control=control,
-        leaks=leaks,
-        metadata=metadata,
-    )
-
-
-def build_report(context: BinaryContext) -> AnalysisReport:
-    context_dict = context.to_dict()
-    findings = run_detectors(context_dict)
-    context_dict["findings"] = {name: finding.__dict__ for name, finding in findings.items()}
-    hints = [hint.__dict__ for hint in build_hints(context_dict)]
-    return AnalysisReport(context=context_dict, findings=context_dict["findings"], hints=hints)
-
+from .validators import ToolchainValidator
 
 REQUIRED_TOOLS = ["strings", "nm"]
-OPTIONAL_TOOLS = ["file", "checksec"]
+OPTIONAL_TOOLS = ["file", "checksec", "readelf", "objdump", "ldd", "ROPgadget", "r2", "gdb"]
 
 
 def preflight_tools() -> list[str]:
-    required_tools = REQUIRED_TOOLS
-    optional_tools = OPTIONAL_TOOLS
-    missing = [tool for tool in required_tools if not tool_exists(tool)]
+    missing = [tool for tool in REQUIRED_TOOLS if not tool_exists(tool)]
     if missing:
         raise RuntimeError(f"Missing required tools: {', '.join(missing)}")
-    optional_missing = [tool for tool in optional_tools if not tool_exists(tool)]
-    return optional_missing
+    return [tool for tool in OPTIONAL_TOOLS if not tool_exists(tool)]
 
 
 def install_instructions(tools: list[str]) -> str:
@@ -94,7 +60,7 @@ def install_tools(tools: list[str]) -> None:
         raise RuntimeError("No known tools to install.")
     system = platform.system().lower()
     if system != "linux":
-        raise RuntimeError(install_instructions(tools))
+        raise RuntimeError(install_instructions(safe_tools))
     package_managers = [
         ("apt-get", ["sudo", "apt-get", "update"], ["sudo", "apt-get", "install", "-y"]),
         ("dnf", [], ["sudo", "dnf", "install", "-y"]),
@@ -106,7 +72,7 @@ def install_tools(tools: list[str]) -> None:
                 subprocess.run(update_cmd, check=False)
             subprocess.run(install_cmd + safe_tools, check=False)
             return
-    raise RuntimeError(install_instructions(tools))
+    raise RuntimeError(install_instructions(safe_tools))
 
 
 def extract_archive(path: str) -> tuple[str, TemporaryDirectory] | None:
@@ -138,6 +104,36 @@ def sanity_check(path: str) -> None:
         raise ValueError("Selected file is not an ELF binary.")
 
 
+def build_context(path: str, validator: ToolchainValidator, preflight_missing: list[str]) -> BinaryKnowledgeContext:
+    metadata = extract_fingerprint(path, validator)
+    protections = extract_protections(path, validator)
+    imports_data = extract_imports(path, validator)
+    strings_data = extract_strings(path, validator)
+    input_surface = extract_input_surface(imports_data.get("imports", []))
+    stack = analyze_stack_frame()
+    got = extract_got(path, validator, protections.get("relro", "unknown"))
+    callgraph = extract_callgraph(imports_data.get("functions", []))
+    toolchain = extract_toolchain_fingerprint(path, validator)
+
+    context = BinaryKnowledgeContext(
+        metadata=metadata,
+        protections=protections,
+        imports={"imports": imports_data.get("imports", [])},
+        symbols={"functions": imports_data.get("functions", [])},
+        input_surface=input_surface,
+        control_flow=callgraph,
+        leak_surface={"format_strings": strings_data.get("format_strings", [])},
+        exploit_primitives={"got": got, "stack": stack},
+        toolchain={
+            "capabilities": validator.capabilities(),
+            "preflight_missing": preflight_missing,
+            "fingerprint": toolchain,
+        },
+    )
+    context.metadata["strings"] = strings_data
+    return context
+
+
 def analyze_path(path: str, fmt: str, install_missing: bool = False) -> str:
     try:
         preflight_missing = preflight_tools()
@@ -149,29 +145,47 @@ def analyze_path(path: str, fmt: str, install_missing: bool = False) -> str:
             preflight_missing = preflight_tools()
         else:
             raise RuntimeError(f"{exc}\n\n{install_instructions(missing_tools)}") from exc
+
     extracted = extract_archive(path)
     temp_dir = None
     try:
         if extracted:
             path, temp_dir = extracted
         sanity_check(path)
-        report = build_report(build_context(path, preflight_missing))
+        validator = ToolchainValidator(REQUIRED_TOOLS + OPTIONAL_TOOLS)
+        validator.validate()
+        context = build_context(path, validator, preflight_missing)
+        context_dict = context.to_dict()
+        context_dict["heuristic_scores"] = score_paths(context_dict)
+        context_dict["exploit_paths"] = synthesize_paths(context_dict)
+        report = Report(context_dict)
         if fmt == "json":
             return report.to_json()
-        if fmt == "markdown":
-            return report.to_markdown()
+        if fmt == "explain":
+            return report.to_explain_payload()
         return report.to_text()
     finally:
         if temp_dir:
             temp_dir.cleanup()
 
 
+def validate_tools() -> str:
+    validator = ToolchainValidator(REQUIRED_TOOLS + OPTIONAL_TOOLS)
+    status = validator.validate()
+    lines = ["[TOOLCHAIN VALIDATION]"]
+    for tool, state in status.items():
+        lines.append(f"- {tool}: {'available' if state.available else 'missing'}")
+        if state.version:
+            lines.append(f"  version: {state.version}")
+    return "\n".join(lines)
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="PWN Hacking Tool")
-    parser.add_argument("binary", help="Path to ELF binary")
+    parser = argparse.ArgumentParser(description="PWN Binary Intelligence Tool v0.4")
+    parser.add_argument("binary", nargs="?", help="Path to ELF binary")
     parser.add_argument(
         "--format",
-        choices=["text", "json", "markdown"],
+        choices=["text", "json", "explain"],
         default="text",
         help="Output format",
     )
@@ -180,6 +194,16 @@ def parse_args() -> argparse.Namespace:
         "--install-tools",
         action="store_true",
         help="Attempt to install missing required tools using the system package manager.",
+    )
+    parser.add_argument(
+        "--install-tools-only",
+        action="store_true",
+        help="Install required tools and exit without analyzing a binary.",
+    )
+    parser.add_argument(
+        "--validate-tools",
+        action="store_true",
+        help="Validate available tools and exit.",
     )
     return parser.parse_args()
 
@@ -193,6 +217,15 @@ def write_output(content: str, output_path: str | None) -> None:
 
 def main() -> None:
     args = parse_args()
+    if args.install_tools_only:
+        install_tools(REQUIRED_TOOLS)
+        print("Tools installation attempted. Re-run with --validate-tools to verify.")
+        return
+    if args.validate_tools:
+        write_output(validate_tools(), args.output)
+        return
+    if not args.binary:
+        raise SystemExit("Binary path required unless using --install-tools-only or --validate-tools.")
     content = analyze_path(args.binary, args.format, install_missing=args.install_tools)
     write_output(content, args.output)
 

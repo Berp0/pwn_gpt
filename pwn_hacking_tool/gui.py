@@ -64,7 +64,7 @@ def run_gui() -> None:
     options = ttk.Frame(frame)
     options.pack(fill=tk.X, pady=8)
     ttk.Label(options, text="Output format:").pack(side=tk.LEFT)
-    ttk.Combobox(options, textvariable=output_var, values=["text", "json", "markdown"], width=12).pack(
+    ttk.Combobox(options, textvariable=output_var, values=["text", "json", "explain"], width=12).pack(
         side=tk.LEFT, padx=5
     )
     ttk.Button(options, text="Analyze", command=run_analysis).pack(side=tk.LEFT, padx=10)
