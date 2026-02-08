@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+import argparse
+import tarfile
+import zipfile
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from .adapters import (
+    AdapterOutput,
+    collect_adapter_metadata,
+    detect_control,
+    detect_leaks,
+    run_checksec,
+    run_file,
+    run_nm,
+    run_strings,
+)
+from .context import BinaryContext
+from .detectors import run_detectors
+from .hints import build_hints
+from .report import AnalysisReport
+from .utils import check_file_size, ensure_file, is_elf, tool_exists
+
+
+def build_context(path: str) -> BinaryContext:
+    output = AdapterOutput()
+    binary_info = run_file(path, output)
+    protections = run_checksec(path, output)
+    symbols = run_nm(path, output)
+    strings = run_strings(path, output)
+    control = detect_control(symbols, protections)
+    leaks = detect_leaks(strings, symbols)
+    metadata = collect_adapter_metadata(output)
+    return BinaryContext(
+        binary=binary_info,
+        protections=protections,
+        symbols=symbols,
+        strings=strings,
+        control=control,
+        leaks=leaks,
+        metadata=metadata,
+    )
+
+
+def build_report(context: BinaryContext) -> AnalysisReport:
+    context_dict = context.to_dict()
+    findings = run_detectors(context_dict)
+    context_dict["findings"] = {name: finding.__dict__ for name, finding in findings.items()}
+    hints = [hint.__dict__ for hint in build_hints(context_dict)]
+    return AnalysisReport(context=context_dict, findings=context_dict["findings"], hints=hints)
+
+
+def preflight_tools() -> None:
+    required_tools = ["file", "strings", "nm"]
+    missing = [tool for tool in required_tools if not tool_exists(tool)]
+    if missing:
+        raise RuntimeError(f"Missing required tools: {', '.join(missing)}")
+
+
+def extract_archive(path: str) -> tuple[str, TemporaryDirectory] | None:
+    archive_path = Path(path)
+    if not archive_path.exists():
+        return None
+    suffixes = "".join(archive_path.suffixes)
+    if suffixes not in {".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2"}:
+        return None
+    temp_dir = TemporaryDirectory()
+    extract_path = Path(temp_dir.name)
+    if suffixes == ".zip":
+        with zipfile.ZipFile(archive_path) as archive:
+            archive.extractall(extract_path)
+    else:
+        with tarfile.open(archive_path) as archive:
+            archive.extractall(extract_path)
+    for file_path in extract_path.rglob("*"):
+        if file_path.is_file() and is_elf(file_path):
+            return str(file_path), temp_dir
+    temp_dir.cleanup()
+    raise RuntimeError("No ELF binary found inside archive.")
+
+
+def sanity_check(path: str) -> None:
+    ensure_file(path)
+    check_file_size(path)
+    if not is_elf(path):
+        raise ValueError("Selected file is not an ELF binary.")
+
+
+def analyze_path(path: str, fmt: str) -> str:
+    preflight_tools()
+    extracted = extract_archive(path)
+    temp_dir = None
+    try:
+        if extracted:
+            path, temp_dir = extracted
+        sanity_check(path)
+        report = build_report(build_context(path))
+        if fmt == "json":
+            return report.to_json()
+        if fmt == "markdown":
+            return report.to_markdown()
+        return report.to_text()
+    finally:
+        if temp_dir:
+            temp_dir.cleanup()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="PWN Hacking Tool")
+    parser.add_argument("binary", help="Path to ELF binary")
+    parser.add_argument(
+        "--format",
+        choices=["text", "json", "markdown"],
+        default="text",
+        help="Output format",
+    )
+    parser.add_argument("--output", help="Write report to file instead of stdout")
+    return parser.parse_args()
+
+
+def write_output(content: str, output_path: str | None) -> None:
+    if output_path:
+        Path(output_path).write_text(content)
+    else:
+        print(content)
+
+
+def main() -> None:
+    args = parse_args()
+    content = analyze_path(args.binary, args.format)
+    write_output(content, args.output)
+
+
+if __name__ == "__main__":
+    main()
