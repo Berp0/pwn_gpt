@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import json
+import tarfile
+import zipfile
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from .adapters import (
     AdapterOutput,
@@ -18,6 +20,7 @@ from .context import BinaryContext
 from .detectors import run_detectors
 from .hints import build_hints
 from .report import AnalysisReport
+from .utils import check_file_size, ensure_file, is_elf, tool_exists
 
 
 def build_context(path: str) -> BinaryContext:
@@ -48,6 +51,61 @@ def build_report(context: BinaryContext) -> AnalysisReport:
     return AnalysisReport(context=context_dict, findings=context_dict["findings"], hints=hints)
 
 
+def preflight_tools() -> None:
+    required_tools = ["file", "strings", "nm"]
+    missing = [tool for tool in required_tools if not tool_exists(tool)]
+    if missing:
+        raise RuntimeError(f"Missing required tools: {', '.join(missing)}")
+
+
+def extract_archive(path: str) -> tuple[str, TemporaryDirectory] | None:
+    archive_path = Path(path)
+    if not archive_path.exists():
+        return None
+    suffixes = "".join(archive_path.suffixes)
+    if suffixes not in {".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2"}:
+        return None
+    temp_dir = TemporaryDirectory()
+    extract_path = Path(temp_dir.name)
+    if suffixes == ".zip":
+        with zipfile.ZipFile(archive_path) as archive:
+            archive.extractall(extract_path)
+    else:
+        with tarfile.open(archive_path) as archive:
+            archive.extractall(extract_path)
+    for file_path in extract_path.rglob("*"):
+        if file_path.is_file() and is_elf(file_path):
+            return str(file_path), temp_dir
+    temp_dir.cleanup()
+    raise RuntimeError("No ELF binary found inside archive.")
+
+
+def sanity_check(path: str) -> None:
+    ensure_file(path)
+    check_file_size(path)
+    if not is_elf(path):
+        raise ValueError("Selected file is not an ELF binary.")
+
+
+def analyze_path(path: str, fmt: str) -> str:
+    preflight_tools()
+    extracted = extract_archive(path)
+    temp_dir = None
+    try:
+        if extracted:
+            path, temp_dir = extracted
+        sanity_check(path)
+        report = build_report(build_context(path))
+        if fmt == "json":
+            return report.to_json()
+        if fmt == "markdown":
+            return report.to_markdown()
+        return report.to_text()
+    finally:
+        if temp_dir:
+            temp_dir.cleanup()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PWN Hacking Tool")
     parser.add_argument("binary", help="Path to ELF binary")
@@ -61,13 +119,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def write_output(report: AnalysisReport, fmt: str, output_path: str | None) -> None:
-    if fmt == "json":
-        content = report.to_json()
-    elif fmt == "markdown":
-        content = report.to_markdown()
-    else:
-        content = report.to_text()
+def write_output(content: str, output_path: str | None) -> None:
     if output_path:
         Path(output_path).write_text(content)
     else:
@@ -76,8 +128,8 @@ def write_output(report: AnalysisReport, fmt: str, output_path: str | None) -> N
 
 def main() -> None:
     args = parse_args()
-    report = build_report(build_context(args.binary))
-    write_output(report, args.format, args.output)
+    content = analyze_path(args.binary, args.format)
+    write_output(content, args.output)
 
 
 if __name__ == "__main__":

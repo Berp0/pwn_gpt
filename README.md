@@ -117,6 +117,20 @@ python -m pwn_hacking_tool.cli ./chall --format json --output report.json
 python -m pwn_hacking_tool.cli ./chall --format markdown --output report.md
 ```
 
+### GUI
+
+```bash
+python -m pwn_hacking_tool.gui
+```
+
+GUI pozwala wrzucić plik binarki lub archiwum i od razu zobaczyć raport w oknie.
+
+### Preflight i sanity checks
+
+- Narzędzie sprawdza dostępność kluczowych narzędzi (`file`, `strings`, `nm`) przed analizą.
+- Wykonuje sanity check: czy plik istnieje, czy to regularny plik, czy nie jest pusty/za duży, i czy jest ELF-em.
+- Jeśli dostarczysz archiwum (`.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`), binarka zostanie automatycznie wyekstrahowana.
+
 ## Architektura danych (BinaryContext)
 
 Minimalny schema danych generowany przez `BinaryContext`:

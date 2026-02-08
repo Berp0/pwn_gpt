@@ -14,3 +14,4 @@ authors = [{ name = "Codex" }]
 
 [project.scripts]
 pwn-hacking-tool = "pwn_hacking_tool.cli:main"
+pwn-hacking-tool-gui = "pwn_hacking_tool.gui:run_gui"
